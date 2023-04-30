@@ -1,0 +1,736 @@
+
+
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[prcImportFile_208103]') AND type in (N'P', N'PC'))
+DROP PROCEDURE [dbo].[prcImportFile_208103]
+GO
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+/**
+Begin Tran 
+EXEC prcImportFile_208103 1,null,28,'process'
+EXEC prcImportFile_208103 1,null,23,'complete'
+rollback
+**/
+CREATE PROCEDURE prcImportFile_208103
+(
+@userId INT,
+@contextId INT=NULL,
+@importFileId INT,
+@action NVARCHAR(50)
+)
+AS 
+BEGIN 
+EXEC prcUpdateImportFileFields 1,@importFileId
+
+DECLARE @i INT = 1
+DECLARE @cnt INT = 0
+DECLARE @isDataNotAvailable BIT =0
+DECLARE @notAvailableList NVARCHAR(MAX)
+DECLARE @result NVARCHAR(MAX)=''
+DECLARE @isProcessed BIT=1
+DECLARE @importFileFieldId INT=''
+DECLARE @dups NVARCHAR(MAX)=''
+DECLARE @dupRowCount int=0
+
+
+DECLARE @reqColumnNames NVARCHAR(MAX) = ''
+
+DECLARE @notAvailableItems AS TABLE (Items NVARCHAR(MAX))
+
+IF OBJECT_ID('tempdb..#stagingDataSet1') IS NOT NULL
+DROP TABLE #stagingDataSet1
+IF OBJECT_ID('tempdb..#stagingDataSet2') IS NOT NULL
+DROP TABLE #stagingDataSet2
+IF OBJECT_ID('tempdb..#ErrorSet') IS NOT NULL
+DROP TABLE #ErrorSet
+IF OBJECT_ID('tempdb..#TableDetails') IS NOT NULL
+DROP TABLE #TableDetails
+IF OBJECT_ID('tempdb..#TableMergeHeaders') IS NOT NULL
+DROP TABLE #TableMergeHeaders
+
+
+DECLARE @TblSiteId table    
+      (    
+         importFileFieldId int null  
+      )    
+      INSERT INTO @TblSiteId    
+      SELECT *    
+      FROM fnSplit(@importFileFieldId, ',')
+
+CREATE TABLE #stagingDataSet1
+(
+	TrStyle  NVARCHAR(MAX),
+	Td1Style NVARCHAR(MAX),
+	Td1Value NVARCHAR(MAX),
+	Td2Style NVARCHAR(MAX),
+	Td2Value NVARCHAR(MAX),
+	Td3Style NVARCHAR(MAX),
+	Td3Value NVARCHAR(MAX),
+	Td4Style NVARCHAR(MAX),
+	Td4Value NVARCHAR(MAX),
+	Td5Style NVARCHAR(MAX),
+	Td5Value NVARCHAR(MAX),
+	Td6Style NVARCHAR(MAX),
+	Td6Value NVARCHAR(50),
+	Td7Style NVARCHAR(MAX),
+	Td7Value NVARCHAR(MAX),
+	Td8Style NVARCHAR(MAX),
+	Td8Value NVARCHAR(MAX),
+	Td39Style NVARCHAR(MAX),
+	isProcessed NVARCHAR(MAX),
+	Td40Style NVARCHAR(MAX),
+	ErrorResult NVARCHAR(MAX),
+
+)
+CREATE TABLE #stagingDataSet2
+(
+	TrStyle  NVARCHAR(MAX),
+	Td1Style NVARCHAR(MAX),
+	Td1Value NVARCHAR(MAX),
+	Td2Style NVARCHAR(MAX),
+	Td2Value NVARCHAR(MAX),
+	Td3Style NVARCHAR(MAX),
+	Td3Value NVARCHAR(MAX),
+	Td4Style NVARCHAR(MAX),
+	Td4Value NVARCHAR(MAX),
+	Td5Style NVARCHAR(MAX),
+	Td5Value NVARCHAR(MAX),
+	Td6Style NVARCHAR(MAX),
+	Td6Value NVARCHAR(50),
+	Td7Style NVARCHAR(MAX),
+	Td7Value NVARCHAR(MAX),
+	Td8Style NVARCHAR(MAX),
+	Td8Value NVARCHAR(MAX),
+	Td39Style NVARCHAR(MAX),
+	isProcessed NVARCHAR(MAX),
+	Td40Style NVARCHAR(MAX),
+	ErrorResult NVARCHAR(MAX),
+)
+
+
+IF (SELECT COUNT(*) FROM #stagingDataSet1 WHERE Td2Value = '') > 0
+BEGIN
+SET @isDataNotAvailable = 1
+SET @notAvailableList = 'EmployeeCode'
+END
+
+CREATE TABLE #TableDetails
+(
+TableName nvarchar(max),
+Type nvarchar(max)
+)
+
+CREATE TABLE #ErrorSet
+(
+ResultSet NVARCHAR(MAX),
+Result NVARCHAR(MAX)
+)
+
+CREATE TABLE #TableMergeHeaders
+(
+MergeTdVale nvarchar(max)
+)
+
+DECLARE @thStyle nvarchar(max)= 'text-align:Center;padding: 5px;color:white'
+DECLARE @tdStyle nvarchar(max) = 'text-align:Center;padding: 5px;color:black'
+DECLARE @errorStyle nvarchar(max) = 'text-align:Center;padding: 5px;color:red'
+
+IF OBJECT_ID('TEMPDB..#CustomersStaging') IS NOT NULL
+DROP TABLE #customersStaging
+IF OBJECT_ID('TEMPDB..#dupTemp1') IS NOT NULL
+DROP TABLE #dupTemp1
+
+DECLARE @EmployeeCode NVARCHAR(max)
+DECLARE @EmployeeName NVARCHAR(max)
+DECLARE @LeaveTypeDesc NVARCHAR(max)
+DECLARE @CurrentYearEligibilityLeaves int
+Declare @CurrentYearBalanceLeaves int
+Declare @CurrentYearOnHoldLeaves int
+DECLARE @PreviousYearBalancedLeaves int
+DECLARE @Year int
+SET @importFileFieldId=0
+
+
+--SELECT @isCustomerCodeAutogenerate= [dbo].[fnGetCompanyConfigurationValue] (@userId,'BD_CUST_CUSTCODE_AUTO_GEN')
+CREATE TABLE #LeavesStaging
+(
+--ID INT IDENTITY,
+[EmployeeCode] NVARCHAR(max),
+[EmployeeName] NVARCHAR(max),
+[LeaveTypeDesc] NVARCHAR(max),
+[CurrentYearEligibilityLeaves] NVARCHAR(max),
+[PreviousYearBalancedLeaves] NVARCHAR(max),
+[Year] NVARCHAR(max),
+[CurrentYearBalanceLeaves] int,
+[CurrentYearOnHoldLeaves] int,
+[ImportFileFieldId] INT
+)
+DECLARE @rules XML 
+DECLARE @isEmployeeCodeDuplicate BIT
+DECLARE @isMandatory BIT
+SELECT @rules = DataRules FROM zimportFileTypeLookUp WHERE ImportFileTypeCode='208103'
+
+CREATE TABLE #dataRules 
+(
+Id INT IDENTITY(1,1),
+isEmployeeCodeDuplicate BIT
+)
+
+--To get Site ids  
+      DECLARE @TblEmployeeCode table    
+      (    
+         SiteId int null  
+      )    
+      INSERT INTO @TblEmployeeCode   
+      SELECT *    
+      FROM fnSplit (@EmployeeCode,',' ) 
+
+INSERT INTO #dataRules 
+SELECT 
+T.c.value('isEmployeeCodeDuplicate[1]','BIT')
+
+FROM @rules.nodes('/Root')T(c)
+
+
+
+SELECT @isEmployeeCodeDuplicate=isEmployeeCodeDuplicate FROM #dataRules
+
+CREATE TABLE #dupTemp1
+   ( 
+     DupId INT IDENTITY(1,1),
+     Field NVARCHAR(MAX) ,
+     DupCount INT
+	)
+	
+DECLARE @overallErrMsg NVARCHAR(MAX) = ''
+DECLARE @isOverallErrAvailable bit = 0
+
+INSERT INTO #LeavesStaging([EmployeeCode] ,
+[EmployeeName],
+[LeaveTypeDesc] ,
+[CurrentYearEligibilityLeaves] ,
+[PreviousYearBalancedLeaves] ,
+[Year],
+[CurrentYearBalanceLeaves],
+[CurrentYearOnHoldLeaves],
+[ImportFileFieldId])
+SELECT StrField1,StrField2,StrField3,StrField4,StrField5,StrField6,StrField7,StrField8,ImportFileFieldId
+FROM ImportFileFields 
+WHERE ImportFileId=@importFileId
+
+
+UPDATE #LeavesStaging SET
+[EmployeeCode]			=LTRIM(RTRIM(NULLIF([EmployeeCode]			,''))),
+[EmployeeName]			=LTRIM(RTRIM(NULLIF([EmployeeName]			,''))),
+[LeaveTypeDesc]				=LTRIM(RTRIM(NULLIF([LeaveTypeDesc]				,''))),
+[CurrentYearEligibilityLeaves]					=LTRIM(RTRIM(NULLIF([CurrentYearEligibilityLeaves]					,''))),
+[PreviousYearBalancedLeaves]					=LTRIM(RTRIM(NULLIF([PreviousYearBalancedLeaves]					,''))),
+[Year]				=LTRIM(RTRIM(NULLIF([Year]				,''))),
+[CurrentYearBalanceLeaves] = LTRIM(RTRIM(NULLIF([CurrentYearBalanceLeaves]				,''))),
+[CurrentYearOnHoldLeaves]=LTRIM(RTRIM(NULLIF([CurrentYearOnHoldLeaves]				,''))),
+[ImportFileFieldId]					=LTRIM(RTRIM(NULLIF([ImportFileFieldId]					,'')))
+
+/************************************************* Check:Nulls ************************************************************************/
+
+IF EXISTS ( SELECT 1 EmployeeCode FROM #LeavesStaging WHERE EmployeeCode IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field EmployeeCode cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','EmployeeCode is Mandatory'
+END 
+
+IF EXISTS ( SELECT 1 EmployeeName FROM #LeavesStaging WHERE EmployeeName IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field EmployeeName cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','EmployeeName is Mandatory'
+END 
+
+IF EXISTS ( SELECT 1 LeaveTypeDesc FROM #LeavesStaging WHERE LeaveTypeDesc IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field LeaveTypeDesc cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','LeaveTypeDesc is Mandatory'
+END 
+
+IF EXISTS ( SELECT 1 CurrentYearEligibilityLeaves FROM #LeavesStaging WHERE CurrentYearEligibilityLeaves IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field CurrentYearEligibilityLeaves cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','CurrentYearEligibilityLeaves is Mandatory'
+END 
+
+IF EXISTS ( SELECT 1 PreviousYearBalancedLeaves FROM #LeavesStaging WHERE PreviousYearBalancedLeaves IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field PreviousYearBalancedLeaves cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','PreviousYearBalancedLeaves is Mandatory'
+END 
+
+IF EXISTS ( SELECT 1 Year FROM #LeavesStaging WHERE Year IS NULL)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'Field Year cannot be null' + '</br>'
+	SET @isOverallErrAvailable = 1
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Mandatory Fields','Year is Mandatory'
+END 
+/************************************************* Check:Nulls ************************************************************************/
+
+IF EXISTS(select top 1 1 from #LeavesStaging WHERE NULLIF(EmployeeCode,'') is not null) and exists(select top 1 1 from #LeavesStaging where nullif(EmployeeCode,'') is null)
+BEGIN
+	SET @overallErrMsg = @overallErrMsg + 'EmployeeCode Should be available for all Employees or should not be for any  '  + '</br>'
+	SET @isOverallErrAvailable = 1
+
+	INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+	SELECT 'Partial Data not Accepted','EmployeeCode Should be available for all Employees or should not be for any'
+END
+
+
+--/************************************************* Check:Duplicates in Employee Code ************************************************************************/
+IF NOT EXISTS(select top 1 1 from #LeavesStaging WHERE NULLIF(EmployeeCode,'') is not null)
+
+BEGIN
+
+SET  @dups=''
+SET @dupRowCount=0
+
+
+INSERT INTO #dupTemp1 
+		SELECT EmployeeCode,COUNT(EmployeeCode)
+		FROM #LeavesStaging
+		GROUP BY EmployeeCode 
+		HAVING COUNT(EmployeeCode)>1
+
+
+SELECT @dups = COALESCE(@dups + ',', '') + CAST(tmp.Field AS nvarchar(max)) FROM #dupTemp1 tmp
+SET @dups = STUFF(@dups ,1,1,'')
+
+
+	IF @dups<>''
+		BEGIN
+		SET @overallErrMsg = @overallErrMsg + '#Duplicates found in  EmployeeCode import data '+@dups+ '</br>'
+		SET @isOverallErrAvailable = 1
+
+		INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+		SELECT 'Duplicates in import Sheet: EmployeeCode',@dups
+			
+		END
+end
+--/************************************************* Check:Duplicates in Employee Name in database   **************************************/
+
+
+SET  @dups=''
+SET @dupRowCount=0
+
+TRUNCATE TABLE #dupTemp1 
+INSERT INTO #dupTemp1 
+		SELECT EmployeeName,COUNT(EmployeeName)
+		FROM #LeavesStaging CS
+		INNER JOIN Employees C ON C.EmployeeCode=CS.EmployeeCode
+		GROUP BY EmployeeName 
+		HAVING COUNT(EmployeeName)>0
+
+
+SELECT @dups = COALESCE(@dups + ',', '') + CAST(tmp.Field AS nvarchar(max)) FROM #dupTemp1 tmp
+SET @dups = STUFF(@dups ,1,1,'')
+
+
+	IF @dups<>''
+		BEGIN
+		SET @overallErrMsg = @overallErrMsg + '#EmployeeName already present in Database'+@dups+ '</br>'
+		SET @isOverallErrAvailable = 1
+
+		INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+		SELECT 'Data Already Exists in database: EmployeeName',@dups
+		END
+
+
+
+
+--/************************************************* Check:Duplicates in CurrentYearEligibilityLeaves in Database ************************************************************************/
+
+SET  @dups=''
+SET @dupRowCount=0
+
+TRUNCATE TABLE #dupTemp1 
+INSERT INTO #dupTemp1 (Field, DupCount)
+SELECT 'CurrentYearEligibilityLeaves', COUNT(TRY_CAST(CurrentYearEligibilityLeaves AS DECIMAL(10,2)))
+FROM #LeavesStaging CS
+INNER JOIN Employees C ON C.EmployeeCode = CS.EmployeeCode
+GROUP BY EmployeeName 
+HAVING COUNT(EmployeeName) > 0
+
+
+
+SELECT @dups = COALESCE(@dups + ',', '') + CAST(tmp.Field AS nvarchar(max)) FROM #dupTemp1 tmp
+SET @dups = STUFF(@dups ,1,1,'')
+
+
+	IF @dups<>''
+		BEGIN
+		SET @overallErrMsg = @overallErrMsg + '#CurrentYearEligibilityLeaves already present in Database'+@dups+ '</br>'
+		SET @isOverallErrAvailable = 1
+
+		INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+		SELECT 'Data Already Exists in database: CurrentYearEligibilityLeaves',@dups
+		END
+
+
+
+
+
+IF (@action='Process')
+BEGIN
+INSERT INTO #TableDetails Values ('ErrorTable', 'ERRORTABLE'),  ('MergeHeader', 'MERHEAD'), ('Tablehearder', 'TABLEHEAD'), ('TableData', 'TABLEDATA');
+
+IF @isOverallErrAvailable = 0
+BEGIN
+
+
+SELECT @cnt=COUNT(*) FROM #LeavesStaging
+
+
+WHILE (@i<=@cnt)
+BEGIN
+
+	SET @isProcessed = 1
+	SET @result = ''
+
+	SELECT @EmployeeCode=EmployeeCode ,
+@EmployeeName=EmployeeName ,
+@LeaveTypeDesc=LeaveTypeDesc,
+@CurrentYearEligibilityLeaves=CurrentYearEligibilityLeaves ,
+@PreviousYearBalancedLeaves=PreviousYearBalancedLeaves ,
+@Year=Year ,
+@importFileFieldId=importFileFieldId
+FROM #LeavesStaging
+
+
+/************************************************* Check:UoM Availability  ****************************************************/
+
+
+DELETE @notAvailableItems 
+SET @notAvailableList=''
+
+INSERT INTO @notAvailableItems(Items)
+SELECT tmp.ValueUoM
+FROM #LeavessStaging tmp 
+LEFT JOIN (SELECT U.UoMShortName,U.UoMId FROM zUOMLookup U WHERE  U.IsActive = 1  AND U.UoMTypeId=2) T ON tmp.ValueUoM =T.UoMShortName
+WHERE T.UoMId IS  NULL  
+
+SELECT @notAvailableList = COALESCE(@notAvailableList + ',', '') + CAST(tmp.Items AS nvarchar(max)) FROM @notAvailableItems tmp
+SET @notAvailableList = CASE WHEN CHARINDEX(',',@notAvailableList)=1 THEN STUFF(@notAvailableList ,1,1,'') ELSE @notAvailableList END
+
+
+IF @notAvailableList <>''
+BEGIN
+		SET @overallErrMsg = @overallErrMsg + '#UOMs does not Exists '+@notAvailableList+ '</br>'
+		SET @isOverallErrAvailable = 1
+
+		INSERT INTO #stagingDataSet2(Td1Value,Td2Value)
+		SELECT 'Master Data: Unavailable in database: UoMs',@notAvailableList
+
+	
+	
+END
+
+
+/************************************************* Check:Nulls ************************************************************************/
+
+	IF @EmployeeCode IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field EmployeeCodes cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+
+	IF @EmployeeName IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field EmployeeName cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+		 
+	IF @LeaveTypeDesc IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field LeaveTypeDesc cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+		 	IF @CurrentYearEligibilityLeaves IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field CurrentYearEligibilityLeaves cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+		 IF @PreviousYearBalancedLeaves IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field PreviousYearBalancedLeaves cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+
+		 IF @Year IS NULL  
+		BEGIN 
+	
+			SET @result = @result +'#Field Year cannot be null'
+			SET @isProcessed = 0
+	
+		 END 
+		 
+	
+
+UPDATE ImportFileFields SET isProcessed=1 ,Result = @result  WHERE ImportFileId = @ImportFileId
+
+---Show
+
+
+INSERT into #stagingDataSet1(Td1Style,Td1Value,Td2Style,Td2Value,Td3Style,Td3Value,Td4Style,Td4Value,Td5Style,Td5Value,Td6Style,Td6Value,isProcessed,ErrorResult)
+	SELECT null,'EmployeeCode',null,'EmployeeName',null,'LeaveTypeDesc',null,'CurrentYearBalanceLeaves',null,'PreviousYearBalancedLeaves',null,'Year','isProcessed',' Result'   
+				
+			
+
+INSERT #stagingDataSet2(Td1Style,Td1Value,Td2Style,Td2Value,Td3Style,Td3Value,Td4Style,Td4Value,Td5Style,Td5Value,Td6Style,Td6Value,Td7Style,Td7Value,Td8Style,Td8Value,isProcessed,ErrorResult)
+	SELECT null,StrField1,null,StrField2,null,	StrField3,null,StrField4,null,StrField5,null,StrField6,null,StrField7,null,StrField8,isProcessed, Result   
+	FROM ImportFileFields  
+	WHERE ImportFileId = @importFileId
+
+
+
+UPDATE #stagingDataSet1 SET  TrStyle =@thStyle, Td1Style=@thStyle ,Td2Style=@thStyle ,Td3Style=@thStyle ,Td4Style=@thStyle ,Td5Style=@thStyle,Td6Style=@thStyle,Td7Style=@thStyle,Td8Style=@thStyle
+UPDATE #stagingDataSet2 SET  TrStyle =@tdStyle, Td1Style=@tdStyle, Td2Style=@tdStyle, Td3Style=@tdStyle, Td4Style=@tdStyle,Td5Style=@tdStyle,Td6Style=@tdStyle,Td7Style=@tdStyle,Td8Style=@tdStyle
+update #stagingDataSet2 
+set   
+	  Td1Style = @errorStyle
+	 ,Td2Style = @errorStyle
+	 ,Td3Style = @errorStyle
+	 ,Td4Style = @errorStyle
+	 ,Td5Style = @errorStyle 
+	 ,Td6Style = @errorStyle 
+	 ,Td7Style = @errorStyle 
+	 ,Td8Style = @errorStyle 
+	 
+	 
+	 
+where isProcessed = '0'
+
+
+IF EXISTS(SELECT 1 from #stagingDataSet2 where isProcessed = 0) OR @isOverallErrAvailable = 1
+BEGIN
+SET @result = 'Validations Failed.'
+UPDATE ImportFileFields SET isProcessed=0 ,Result = @result  WHERE ImportFileId = @importFileId
+	INSERT INTO #ErrorSet
+	VALUES('FALSE','')
+END
+ELSE
+BEGIN
+SET @result = 'Validations Completed Successsfully.'
+UPDATE ImportFileFields SET isProcessed=1 ,Result = @result  WHERE ImportFileId = @importFileId
+
+	INSERT INTO #ErrorSet
+	VALUES('TRUE','')
+END
+
+SELECT * FROM #TableDetails
+SELECT * FROM #ErrorSet
+IF @isOverallErrAvailable = 1
+BEGIN
+
+		
+	INSERT INTO #stagingDataSet1(Td1Style, Td1Value,Td2Style, Td2Value)
+	SELECT @thStyle,'Error Type',@thStyle,'Error Message'
+	UPDATE #stagingDataSet2 set Td1Style = @errorStyle,Td2Style = @errorStyle
+
+	SELECT * from #TableMergeHeaders
+	SELECT null,Td1Style, Td1Value,Td2Style, Td2Value from #stagingDataSet1
+	SELECT null,Td1Style, Td1Value,Td2Style, Td2Value FROM #stagingDataSet2
+END
+ELSE
+BEGIN
+SELECT * from #TableMergeHeaders
+SELECT TrStyle,Td1Style,Td1Value,Td2Style,Td2Value,Td3Style,Td3Value,Td4Style,Td4Value,Td5Style,Td5Value,Td6Style,Td6Value,Td7Style,Td7Value,Td8Style,Td8Value,isProcessed,ErrorResult FROM #stagingDataSet1 
+SELECT TrStyle,Td1Style,Td1Value,Td2Style,Td2Value,Td3Style,Td3Value,Td4Style,Td4Value,Td5Style,Td5Value,Td6Style,Td6Value,Td7Style,Td7Value,Td8Style,Td8Value,isProcessed,ErrorResult FROM #stagingDataSet2
+END
+
+
+
+IF(@action='Complete')
+BEGIN
+	IF NOT EXISTS(SELECT TOP 1 1 FROM ImportFileFields WHERE ImportFileId = @importFileId AND ISNULL(isProcessed,0) = 0)
+	BEGIN 
+	
+	DECLARE @EmpCode NVARCHAR(MAX)
+DECLARE @EmpName NVARCHAR(max)
+DECLARE @LeaveDesc NVARCHAR(max)
+DECLARE @CurrYrEligibleLeaves int
+DECLARE @CurrYrBalLeaves int
+DECLARE @CurrYrOnHoldLeaves int
+DECLARE @PrevYrBalLeaves int
+DECLARE @YearVal int
+
+
+	TRUNCATE TABLE #LeavesStaging
+
+	INSERT INTO #LeavesStaging(EmployeeCode,EmployeeName,LeaveTypeDesc,CurrentYearEligibilityLeaves,PreviousYearBalancedLeaves,Year,ImportFileFieldId )
+		SELECT StrField1, StrField2, StrField3,StrField4,StrField5,StrField6,ImportFileFieldId 
+		FROM ImportFileFields 
+		WHERE ImportFileId = @importFileId
+
+	SET @cnt=0
+	SET @i=1
+
+	SELECT @cnt=COUNT(*) FROM #LeavesStaging
+
+
+	SELECT @EmployeeName=EmployeeName,@EmployeeCode=EmployeeCode FROM #LeavesStaging
+	
+
+	TRUNCATE TABLE #TableMergeHeaders
+	INSERT INTO #TableMergeHeaders
+	SELECT  l.EmployeeCode,  F.Item
+	from #LeavesStaging l
+	CROSS APPLY DBO.FNSPLIT(l.EmployeeCode,',') F
+	INNER JOIN  Employees  D ON D.EmployeeCode=F.Item
+
+
+	CREATE TABLE #LeaveDetails ( SNo INT IDENTITY(1,1))
+   	   
+	INSERT INTO #LeaveDetails
+	SELECT 
+	         E.EmployeeCode,
+			E.FirstName + ' ' + E.LastName,
+	        L.LeaveTypeDesc,
+	        LBD.CurrentYearEligibilityLeaves,
+	        LBD.PreviousYearBalancedLeaves,
+			year(GETDATE()) as Year
+	    FROM 
+	        Employees E 
+	    INNER JOIN 
+	        LeaveBalanceDetails LBD ON E.EmployeeId = LBD.EmployeeId and E.IsActive = LBD.IsActive
+			INNER JOIN zLeaveTypeLookup L ON  L.LeaveTypeId = LBD.LeaveTypeId
+	    WHERE 
+	        LBD.CurrentYear = YEAR(GETDATE()) 
+	        AND LBD.IsActive = 1 
+	      -- AND (NULLIF(@siteId,'') IS NULL OR E.LocationId IN (SELECT SiteId From @TblSiteId))
+		   --AND (@siteId IS NULL OR @siteId='' OR  E.LocationId IN (SELECT SiteId From @TblSiteIds))
+	       -- AND E.UserId = @userId
+	    ORDER BY 
+	        E.EmployeeId ASC,
+	        LBD.LeaveTypeId ASC,
+	        LBD.CreatedOn DESC
+
+Select * from #LeaveDetails
+	--SELECT 
+ --   @EmployeeCode = EmpCode,
+ --   @EmployeeName = EmployeeName,
+ --   @LeaveTypeDesc = LeaveTypeDesc,
+ --   @CurrentYearEligibilityLeaves = CurrentYearEligibilityLeaves,
+ --   @PreviousYearBalancedLeaves = PreviousYearBalancedLeaves,
+ --   @Year = Year
+--FROM 
+--    #LeaveDetails
+
+
+--CREATE TABLE #EmployeeCode
+--(
+--EmployeeCode INT ,
+--EmployeeName NVARCHAR(MAX)
+--,ImportFileFieldId INT
+--)
+
+--CREATE  TABLE #EmployeesId 
+--(
+--EmployeeCode INT,
+--)
+--IF(@action='Complete')
+--BEGIN
+--SET @i = 1 
+--SET @cnt = 0
+--SET @reqColumnNames = 'S.NO., EmployeeCode, EmployeeName, LeaveTypeDesc, CurrentYearEligibilityLeave, PreviousYearBalancedLeaves, Year'
+
+
+
+--INSERT INTO [dbo].[#LeavesStaging] (
+--EmployeeCode, EmployeeName, LeaveTypeDesc, CurrentYearEligibilityLeave, PreviousYearBalancedLeaves, CurrentYearBalanceLeaves, Year)
+--SELECT
+--Td2Value, Td3Value, Td4Value, Td5Value, Td6Value, Td8Value, Td7Value
+--FROM #LeavesStaging s1
+--WHERE NOT EXISTS (
+--SELECT 1 FROM [dbo].[stagingDataSet1] el
+--WHERE el.EmployeeCode = s1.Td2Value AND el.Year = s1.Td7Value AND el.LeaveTypeDesc = s1.Td4Value
+--)
+--select * from stagingDataSet2
+
+-- Verify that currentyear Eligible leaves + previousyear balance leaves greater than or equal to Currentyear balance leaves + Currentyear On Hold leaves
+--IF EXISTS (
+--    SELECT 1
+--    FROM #LeavesStaging LS
+--    INNER JOIN Employees E ON E.EmployeeCode = LS.EmployeeCode
+--    WHERE (LS.CurrentYearEligibilityLeaves + LS.PreviousYearBalancedLeaves) < (LS.CurrentYearBalanceLeaves + LS.CurrentYearOnHoldLeaves)
+--)
+--BEGIN
+--    SET @overallErrMsg = @overallErrMsg + 'Balance is incorrect' + '</br>'
+--    SET @isOverallErrAvailable = 1
+
+--    -- Get the Employee Code and Leave Type Desc for the employees with incorrect balance
+--    DECLARE @empCodes NVARCHAR(MAX) = ''
+--    DECLARE @leaveTypeDescs NVARCHAR(MAX) = ''
+--    SELECT @empCodes = COALESCE(@empCodes + ', ', '') + LS.EmployeeCode, @leaveTypeDescs = COALESCE(@leaveTypeDescs + ', ', '') + LS.LeaveTypeDesc
+--    FROM #LeavesStaging LS
+--    INNER JOIN Employees E ON E.EmployeeCode = LS.EmployeeCode
+--    WHERE (LS.CurrentYearEligibilityLeaves + LS.PreviousYearBalancedLeaves) < (LS.CurrentYearBalanceLeaves + LS.CurrentYearOnHoldLeaves)
+
+--    -- Add the Employee Code and Leave Type Desc to the error message
+--    SET @overallErrMsg = @overallErrMsg + 'Employee Codes: ' + @empCodes + '</br>' + 'Leave Type Descs: ' + @leaveTypeDescs + '</br>'
+--END
+
+-- Verify that data should update while clicking on upload symbol
+--DECLARE @updatedRows int
+--UPDATE E
+--SET
+--    E.CurrentYearEligibilityLeaves = LS.CurrentYearEligibilityLeaves,
+--    E.PreviousYearBalancedLeaves = LS.PreviousYearBalancedLeaves,
+--    E.CurrentYearBalanceLeaves = LS.CurrentYearBalanceLeaves,
+--    E.CurrentYearOnHoldLeaves = LS.CurrentYearOnHoldLeaves
+--FROM LeaveBalanceDetails E
+--INNER JOIN #LeavesStaging LS ON E.EmployeeId = LS.EmployeeCode
+--WHERE (LS.CurrentYearEligibilityLeaves + LS.PreviousYearBalancedLeaves) >= (LS.CurrentYearBalanceLeaves + LS.CurrentYearOnHoldLeaves)
+--SET @updatedRows = @@ROWCOUNT
+
+---- Show a Pop Up if data couldn't be updated
+--IF @updatedRows = 0
+--BEGIN
+--    SET @overallErrMsg = @overallErrMsg + 'Balance is incorrect for at least one Employee' + '</br>'
+--    SET @isOverallErrAvailable = 1
+--END
+
+
+
+
+
+End
+END
+END
+end
+end
+end
+
+
+--begin tran
+--exec dbo.prcProcessAndShowImportFile @userId=1,@importFileid=208103
+
+--exec dbo.prcCompleteImportFile @userId=1,@importFileid=208103
+
+--rollback
